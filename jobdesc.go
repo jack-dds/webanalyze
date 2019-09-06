@@ -16,7 +16,7 @@ type Job struct {
 	URL              string
 	Body             []byte
 	Headers          http.Header //map[string][]string
-	Cookies          []*http.Cookie
+	Cookies          map[string]string
 	Crawl            int
 	SearchSubdomain  bool
 	forceNotDownload bool
@@ -27,11 +27,12 @@ type Job struct {
 // This constructor also sets a flag to explicitly prevent
 // fetching from the URL even if the body and headers are nil
 // or empty. Use this for...offline jobs.
-func NewOfflineJob(url, body string, headers map[string][]string) *Job {
+func NewOfflineJob(url, body string, headers map[string][]string, cookies map[string]string) *Job {
 	return &Job{
 		URL:              url,
 		Body:             []byte(body),
 		Headers:          headers,
+		Cookies:          cookies,
 		Crawl:            0,
 		SearchSubdomain:  false,
 		forceNotDownload: true,

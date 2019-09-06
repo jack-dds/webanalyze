@@ -1,3 +1,5 @@
+// Modified to add custom support for meg output
+
 package webanalyze
 
 import (
@@ -7,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -70,8 +74,74 @@ func Init(workers int, hosts io.Reader, appsFile string, crawlCount int, searchS
 	go func(hosts io.Reader, wa *WebAnalyzer) {
 		scanner := bufio.NewScanner(hosts)
 		for scanner.Scan() {
-			url := scanner.Text()
-			wa.schedule(NewOnlineJob(url, "", nil, crawlCount, searchSubdomain))
+			lineText := scanner.Text()
+			// Parse url from line and get corresponding file
+			split := strings.Split(lineText, " ")
+			path := split[0]
+			url := split[1]
+
+		    file, err := os.Open(path)
+		    if err != nil {
+		        log.Println("Error reading " + path)
+		        file.Close()
+		        continue
+		    }
+
+		    headers := make(map[string][]string)
+		    cookies := make(map[string]string)
+		    body := ""
+
+		    lineScanner := bufio.NewScanner(file)
+		    // First, skip input headers
+		    lineScanner.Scan() // Skip first two lines
+		    lineScanner.Scan()
+		    for lineScanner.Scan() {
+		    	line := lineScanner.Text()
+		    	if !strings.HasPrefix(line, ">") {
+		    		break
+		    	}
+		    }
+
+		    // Read output headers
+		    lineScanner.Scan() // Skip first line
+		    for lineScanner.Scan() {
+		    	line := lineScanner.Text()
+		    	if !strings.HasPrefix(line, "<") {
+		    		break
+		    	}
+		    	headerVal := strings.SplitN(line, ":", 2)
+		    	if len(headerVal) != 2 {
+		    		continue
+		    	}
+		    	first := headerVal[0][2:]
+		    	second := headerVal[1][1:]
+		    	headers[first] = append(headers[first], second)
+
+		    	if strings.HasPrefix(first, "Set-Cookie") { //parse as cookie
+		    		splitCookie := strings.SplitN(second, "=", 2)
+		    		if len(splitCookie) < 2 {
+		    			continue
+		    		}
+		    		key := splitCookie[0]
+		    		value := strings.Split(splitCookie[1], ";")[0]
+		    		cookies[key] = value
+		    	}
+		    }
+
+		    // Read body
+		    lineScanner.Scan() // Skip empty line
+		    for lineScanner.Scan() {
+		    	body += lineScanner.Text()
+		    }
+
+		    file.Close()
+
+		    if err := scanner.Err(); err != nil {
+		        log.Println("Error reading " + path)
+		        continue
+		    }
+
+			wa.schedule(NewOfflineJob(url, body, headers, cookies))
 
 			// increment wg for each to be crawled page
 			if crawlCount > 0 {
@@ -234,7 +304,6 @@ func process(job *Job) ([]Match, error) {
 	var apps = make([]Match, 0)
 	var err error
 
-	var cookies []*http.Cookie
 	var cookiesMap = make(map[string]string)
 	var body []byte
 	var headers http.Header
@@ -243,7 +312,7 @@ func process(job *Job) ([]Match, error) {
 	if job.forceNotDownload {
 		body = job.Body
 		headers = job.Headers
-		cookies = job.Cookies
+		cookiesMap = job.Cookies
 	} else {
 		resp, err := fetchHost(job.URL)
 		if err != nil {
@@ -255,12 +324,7 @@ func process(job *Job) ([]Match, error) {
 		body, err = ioutil.ReadAll(resp.Body)
 		if err == nil {
 			headers = resp.Header
-			cookies = resp.Cookies()
 		}
-	}
-
-	for _, c := range cookies {
-		cookiesMap[c.Name] = c.Value
 	}
 
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
